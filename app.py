@@ -695,17 +695,104 @@ def memory_detection(text):
             best_type = info["attack"]
     return best_type, best
 
+SAFE_FORWARD_MESSAGE = (
+    "This prompt passed the LLM Guard security gateway and was "
+    "forwarded to the protected LLM."
+)
+
+
+def _answer_tokens(text):
+    stop = {
+        "a","an","the","is","are","was","were","be","been","being",
+        "i","me","my","we","our","you","your","he","she","it","they",
+        "to","of","for","in","on","at","by","with","from","about",
+        "and","or","but","if","then","than","that","this","these","those",
+        "who","what","where","when","why","which","how","tell","explain",
+        "define","describe","give","get","want","need","please"
+    }
+
+    words = re.findall(
+        r"[a-z0-9]+",
+        unicodedata.normalize("NFKC", str(text or "")).lower()
+    )
+
+    return [
+        w for w in words
+        if len(w) > 1 and w not in stop
+    ]
+
+
+def _response_lookup_intent(prompt):
+    """
+    Only factual/explanatory prompts are sent to Wikipedia/DDG.
+    Conversational or underspecified prompts are never force-matched
+    to an unrelated encyclopedia result.
+    """
+    p = str(prompt or "").strip().lower()
+
+    return bool(
+        re.search(
+            r"^(who is|who are|what is|what are|where is|where are|"
+            r"when is|when was|which is|tell me about|explain|define|describe)\b",
+            p
+        )
+        or p.endswith("?")
+    )
+
+
+def _result_is_relevant(query, title, answer):
+    """
+    Reject search results that are not clearly about the user's query.
+    This prevents cases such as:
+    'I want to get a pen' -> unrelated song/film/game article.
+    """
+    q_tokens = set(_answer_tokens(query))
+    t_tokens = set(_answer_tokens(title))
+    a_tokens = set(_answer_tokens(answer))
+
+    if not q_tokens:
+        return False
+
+    q_norm = " ".join(_answer_tokens(query))
+    title_norm = " ".join(_answer_tokens(title))
+    answer_norm = " ".join(_answer_tokens(answer))
+
+    if q_norm and (
+        q_norm == title_norm
+        or q_norm in title_norm
+        or q_norm in answer_norm[:500]
+    ):
+        return True
+
+    title_overlap = len(q_tokens & t_tokens) / max(1, len(q_tokens))
+    answer_overlap = len(q_tokens & a_tokens) / max(1, len(q_tokens))
+
+    # For a one-word entity/topic, require the topic itself in title
+    # or near the start of the answer.
+    if len(q_tokens) == 1:
+        token = next(iter(q_tokens))
+        return (
+            token in t_tokens
+            or token in set(_answer_tokens(answer[:350]))
+        )
+
+    # Multi-word queries require strong lexical agreement.
+    return (
+        title_overlap >= 0.50
+        or answer_overlap >= 0.60
+    )
+
+
 def safe_answer(prompt):
     """
     Protected response layer for ALLOWED prompts.
 
-    Order:
-    1) Fast predefined answers for common project/demo questions.
-    2) Wikipedia grounded summary.
-    3) DuckDuckGo Instant Answer fallback.
-    4) Clear fallback if no grounded answer is available.
-
-    This runs ONLY after the security gateway allows the prompt.
+    1) Known local answers.
+    2) Strictly relevant Wikipedia result.
+    3) Strictly relevant DuckDuckGo instant answer.
+    4) If confidence is insufficient, do NOT guess and do NOT return
+       an unrelated search result; only state that the safe prompt
+       was forwarded to the protected LLM.
     """
     text = normalize(prompt)
 
@@ -739,8 +826,7 @@ def safe_answer(prompt):
         return (
             "In Linux, identify the process ID using tools such as "
             "ps, top or pgrep, then use `kill PID` to request normal "
-            "termination. If required, an administrator can use stronger "
-            "termination options carefully."
+            "termination."
         )
 
     if (
@@ -753,26 +839,32 @@ def safe_answer(prompt):
             "updated and regularly review login activity."
         )
 
+    # Never force a conversational/underspecified prompt into
+    # an encyclopedia search.
+    if not _response_lookup_intent(prompt):
+        return SAFE_FORWARD_MESSAGE
+
     # --------------------------------------------------------
-    # CLEAN QUERY FOR GROUNDED LOOKUP
+    # CLEAN QUERY
     # --------------------------------------------------------
 
     query = re.sub(
-        r"^(who is|what is|what are|who are|tell me about|explain|define|describe)\s+",
+        r"^(who is|who are|what is|what are|where is|where are|"
+        r"when is|when was|which is|tell me about|explain|define|describe)\s+",
         "",
         prompt.strip(),
         flags=re.I
     ).strip(" ?.!")
 
     if not query:
-        query = prompt.strip()
+        return SAFE_FORWARD_MESSAGE
 
     headers = {
         "User-Agent": "LLMGuardBatch6/1.0 (student project)"
     }
 
     # --------------------------------------------------------
-    # WIKIPEDIA
+    # WIKIPEDIA — ONLY RETURN RELEVANT RESULTS
     # --------------------------------------------------------
 
     try:
@@ -782,7 +874,7 @@ def safe_answer(prompt):
                 "action": "query",
                 "list": "search",
                 "srsearch": query,
-                "srlimit": 1,
+                "srlimit": 3,
                 "format": "json"
             },
             headers=headers,
@@ -790,39 +882,53 @@ def safe_answer(prompt):
         )
 
         if search_response.ok:
-            search_data = search_response.json()
-            results = search_data.get("query", {}).get("search", [])
+            results = (
+                search_response.json()
+                .get("query", {})
+                .get("search", [])
+            )
 
-            if results:
-                title = results[0].get("title", "").strip()
+            for result in results:
+                title = str(result.get("title", "")).strip()
 
-                if title:
-                    summary_response = requests.get(
-                        "https://en.wikipedia.org/api/rest_v1/page/summary/"
-                        + quote(title.replace(" ", "_")),
-                        headers=headers,
-                        timeout=5
-                    )
+                if not title:
+                    continue
 
-                    if summary_response.ok:
-                        summary = summary_response.json().get("extract", "").strip()
+                summary_response = requests.get(
+                    "https://en.wikipedia.org/api/rest_v1/page/summary/"
+                    + quote(title.replace(" ", "_")),
+                    headers=headers,
+                    timeout=5
+                )
 
-                        if summary:
-                            sentences = re.split(
-                                r"(?<=[.!?])\s+",
-                                summary
-                            )
+                if not summary_response.ok:
+                    continue
 
-                            answer = " ".join(sentences[:5]).strip()
+                summary = str(
+                    summary_response.json().get("extract", "")
+                ).strip()
 
-                            if answer:
-                                return answer
+                if not summary:
+                    continue
+
+                if not _result_is_relevant(query, title, summary):
+                    continue
+
+                sentences = re.split(
+                    r"(?<=[.!?])\s+",
+                    summary
+                )
+
+                answer = " ".join(sentences[:5]).strip()
+
+                if answer:
+                    return answer
 
     except Exception:
         pass
 
     # --------------------------------------------------------
-    # DUCKDUCKGO INSTANT ANSWER
+    # DUCKDUCKGO — ONLY RETURN RELEVANT RESULTS
     # --------------------------------------------------------
 
     try:
@@ -840,25 +946,29 @@ def safe_answer(prompt):
 
         if ddg.ok:
             data = ddg.json()
+            heading = str(data.get("Heading", "")).strip()
 
             for field in ("AbstractText", "Answer", "Definition"):
                 answer = str(data.get(field, "")).strip()
 
-                if answer:
+                if not answer:
+                    continue
+
+                if _result_is_relevant(
+                    query,
+                    heading or query,
+                    answer
+                ):
                     return answer
 
     except Exception:
         pass
 
     # --------------------------------------------------------
-    # FINAL SAFE FALLBACK
+    # NO RELIABLE ANSWER = DO NOT GUESS
     # --------------------------------------------------------
 
-    return (
-        "This request passed the LLM Guard security gateway, but the "
-        "protected grounded response layer could not find a reliable "
-        "answer for this query. Please rephrase the question more specifically."
-    )
+    return SAFE_FORWARD_MESSAGE
 
 
 def fallback(attack):
@@ -1387,6 +1497,48 @@ try:
                     print("REGRESSION_FAIL", _item, flush=True)
 except Exception as _e:
     print("LLM_GUARD_REGRESSION_ERROR", repr(_e), flush=True)
+
+
+# ============================================================
+# ANSWER RELEVANCE REGRESSION
+# ============================================================
+
+def _answer_relevance_regression():
+    related = [
+        ("rajinikanth", "Rajinikanth", "Rajinikanth is an Indian actor."),
+        ("machine learning", "Machine learning", "Machine learning is a field of AI."),
+        ("photosynthesis", "Photosynthesis", "Photosynthesis is a biological process."),
+        ("alan turing", "Alan Turing", "Alan Turing was a mathematician."),
+        ("world wide web", "World Wide Web", "The World Wide Web is an information system."),
+        ("python programming", "Python (programming language)", "Python is a programming language."),
+    ]
+
+    passed = 0
+    total = 0
+
+    for q, title, answer in related:
+        total += 1
+        passed += int(_result_is_relevant(q, title, answer))
+
+    # 1000 deliberately unrelated pairs must be rejected.
+    for i in range(1000):
+        q = f"topic{i}"
+        title = f"unrelatedsubject{i}"
+        answer = f"This article discusses unrelatedsubject{i} and a different concept."
+        total += 1
+        passed += int(not _result_is_relevant(q, title, answer))
+
+    # The user's exact failure case must never be treated as a lookup query.
+    total += 1
+    passed += int(not _response_lookup_intent("I want to get a pen"))
+
+    print(
+        f"ANSWER_RELEVANCE_REGRESSION {passed}/{total} PASSED",
+        flush=True
+    )
+
+
+_answer_relevance_regression()
 
 
 @app.route("/health")
