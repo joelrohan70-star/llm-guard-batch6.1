@@ -724,28 +724,48 @@ def _answer_tokens(text):
 
 def _response_lookup_intent(prompt):
     """
-    Only factual/explanatory prompts are sent to Wikipedia/DDG.
-    Conversational or underspecified prompts are never force-matched
-    to an unrelated encyclopedia result.
+    Decide whether a safe prompt is a genuine factual/explanatory question
+    suitable for the protected grounded response layer.
     """
     p = str(prompt or "").strip().lower()
 
-    return bool(
-        re.search(
-            r"^(who is|who are|what is|what are|where is|where are|"
-            r"when is|when was|which is|tell me about|explain|define|describe)\b",
-            p
-        )
+    factual_starts = (
+        "who is", "who are", "what is", "what are",
+        "where is", "where are", "when is", "when was",
+        "which is", "which are", "tell me about",
+        "explain", "define", "describe",
+        "capital of", "meaning of", "full form of",
+        "difference between", "compare"
+    )
+
+    return (
+        p.startswith(factual_starts)
         or p.endswith("?")
     )
 
 
+def _answer_tokens(text):
+    stop = {
+        "a","an","the","is","are","was","were","be","been","being",
+        "i","me","my","we","our","you","your","he","she","it","they",
+        "to","of","for","in","on","at","by","with","from","about",
+        "and","or","but","if","then","than","that","this","these","those",
+        "who","what","where","when","why","which","how","tell","explain",
+        "define","describe","give","get","want","need","please"
+    }
+
+    words = re.findall(
+        r"[a-z0-9]+",
+        unicodedata.normalize("NFKC", str(text or "")).lower()
+    )
+
+    return [
+        w for w in words
+        if len(w) > 1 and w not in stop
+    ]
+
+
 def _result_is_relevant(query, title, answer):
-    """
-    Reject search results that are not clearly about the user's query.
-    This prevents cases such as:
-    'I want to get a pen' -> unrelated song/film/game article.
-    """
     q_tokens = set(_answer_tokens(query))
     t_tokens = set(_answer_tokens(title))
     a_tokens = set(_answer_tokens(answer))
@@ -767,8 +787,6 @@ def _result_is_relevant(query, title, answer):
     title_overlap = len(q_tokens & t_tokens) / max(1, len(q_tokens))
     answer_overlap = len(q_tokens & a_tokens) / max(1, len(q_tokens))
 
-    # For a one-word entity/topic, require the topic itself in title
-    # or near the start of the answer.
     if len(q_tokens) == 1:
         token = next(iter(q_tokens))
         return (
@@ -776,30 +794,89 @@ def _result_is_relevant(query, title, answer):
             or token in set(_answer_tokens(answer[:350]))
         )
 
-    # Multi-word queries require strong lexical agreement.
     return (
         title_overlap >= 0.50
         or answer_overlap >= 0.60
     )
 
 
+def _extract_fact_query(prompt):
+    q = str(prompt or "").strip()
+
+    patterns = [
+        r"^(who is|who are|what is|what are|where is|where are|"
+        r"when is|when was|which is|which are|tell me about|"
+        r"explain|define|describe)\s+",
+        r"^(capital of|meaning of|full form of)\s+",
+    ]
+
+    for pattern in patterns:
+        q2 = re.sub(pattern, "", q, flags=re.I).strip(" ?.!:")
+        if q2 != q.strip(" ?.!:"):
+            return q2
+
+    return q.strip(" ?.!:")
+
+
+def _simple_safe_answer(prompt):
+    """
+    Deterministic answers for simple safe questions.
+    Returning None means continue to grounded web lookup.
+    """
+    p = str(prompt or "").strip().lower()
+
+    # Basic greetings / conversational safe prompts
+    if p in {"hi", "hello", "hey", "hi bro", "hello bro"}:
+        return "Hello! How can I help you?"
+
+    # Very small arithmetic expressions only
+    expr = re.sub(r"\s+", "", p)
+    if re.fullmatch(r"[0-9+\-*/().%]+", expr) and len(expr) <= 40:
+        try:
+            value = eval(expr, {"__builtins__": {}}, {})
+            if isinstance(value, (int, float)):
+                return str(value)
+        except Exception:
+            pass
+
+    # Common direct facts useful in demos
+    direct = {
+        "capital of india": "The capital of India is New Delhi.",
+        "what is the capital of india": "The capital of India is New Delhi.",
+        "capital of tamil nadu": "The capital of Tamil Nadu is Chennai.",
+        "what is the capital of tamil nadu": "The capital of Tamil Nadu is Chennai.",
+        "full form of ai": "AI stands for Artificial Intelligence.",
+        "full form of ml": "ML stands for Machine Learning.",
+        "full form of llm": "LLM stands for Large Language Model.",
+        "full form of cpu": "CPU stands for Central Processing Unit.",
+        "full form of gpu": "GPU stands for Graphics Processing Unit.",
+        "full form of ram": "RAM stands for Random Access Memory.",
+        "full form of dbms": "DBMS stands for Database Management System.",
+        "full form of os": "OS stands for Operating System."
+    }
+
+    if p in direct:
+        return direct[p]
+
+    return None
+
+
 def safe_answer(prompt):
     """
     Protected response layer for ALLOWED prompts.
 
-    1) Known local answers.
-    2) Strictly relevant Wikipedia result.
-    3) Strictly relevant DuckDuckGo instant answer.
-    4) If confidence is insufficient, do NOT guess and do NOT return
-       an unrelated search result; only state that the safe prompt
-       was forwarded to the protected LLM.
+    - Give a direct answer only when confidence is high.
+    - Use grounded Wikipedia/DDG evidence for factual questions.
+    - Reject irrelevant search results.
+    - If no reliable answer is available, do not guess.
     """
     text = normalize(prompt)
 
-    # --------------------------------------------------------
-    # FAST LOCAL ANSWERS
-    # --------------------------------------------------------
+    local = _simple_safe_answer(prompt)
+    if local:
+        return local
 
+    # Existing project/demo answers
     if "machine learning" in text:
         return (
             "Machine learning is a branch of Artificial Intelligence "
@@ -810,23 +887,22 @@ def safe_answer(prompt):
 
     if "artificial intelligence" in text or text in {"what is ai", "what is ai?"}:
         return (
-            "Artificial Intelligence (AI) is the field of building "
-            "computer systems that can perform tasks such as learning, "
-            "reasoning, perception and decision-making."
+            "Artificial Intelligence (AI) is the field of building computer "
+            "systems that can perform tasks such as learning, reasoning, "
+            "perception and decision-making."
         )
 
     if "prompt injection" in text and ("what is" in text or "explain" in text):
         return (
-            "Prompt injection is an attack in which malicious or "
-            "misleading instructions are inserted into model input "
-            "to manipulate the intended behaviour of an AI application."
+            "Prompt injection is an attack in which malicious or misleading "
+            "instructions are inserted into model input to manipulate the "
+            "intended behaviour of an AI application."
         )
 
     if "kill a process" in text:
         return (
-            "In Linux, identify the process ID using tools such as "
-            "ps, top or pgrep, then use `kill PID` to request normal "
-            "termination."
+            "In Linux, identify the process ID using tools such as ps, top or "
+            "pgrep, then use `kill PID` to request normal termination."
         )
 
     if (
@@ -834,28 +910,17 @@ def safe_answer(prompt):
         and re.search(r"\b(account|hack|password|cyber)\b", text)
     ):
         return (
-            "Use a strong unique password, enable multi-factor "
-            "authentication, avoid suspicious links, keep software "
-            "updated and regularly review login activity."
+            "Use a strong unique password, enable multi-factor authentication, "
+            "avoid suspicious links, keep software updated and regularly review "
+            "login activity."
         )
 
-    # Never force a conversational/underspecified prompt into
-    # an encyclopedia search.
+    # Non-factual / underspecified safe prompts should never be mapped to
+    # a random encyclopedia article.
     if not _response_lookup_intent(prompt):
         return SAFE_FORWARD_MESSAGE
 
-    # --------------------------------------------------------
-    # CLEAN QUERY
-    # --------------------------------------------------------
-
-    query = re.sub(
-        r"^(who is|who are|what is|what are|where is|where are|"
-        r"when is|when was|which is|tell me about|explain|define|describe)\s+",
-        "",
-        prompt.strip(),
-        flags=re.I
-    ).strip(" ?.!")
-
+    query = _extract_fact_query(prompt)
     if not query:
         return SAFE_FORWARD_MESSAGE
 
@@ -864,7 +929,54 @@ def safe_answer(prompt):
     }
 
     # --------------------------------------------------------
-    # WIKIPEDIA — ONLY RETURN RELEVANT RESULTS
+    # DUCKDUCKGO FIRST FOR DIRECT FACT / INSTANT ANSWERS
+    # --------------------------------------------------------
+
+    try:
+        ddg = requests.get(
+            "https://api.duckduckgo.com/",
+            params={
+                "q": prompt,
+                "format": "json",
+                "no_html": 1,
+                "skip_disambig": 0
+            },
+            headers=headers,
+            timeout=5
+        )
+
+        if ddg.ok:
+            data = ddg.json()
+            heading = str(data.get("Heading", "")).strip()
+
+            # Prefer concise direct answers when present.
+            direct_answer = str(data.get("Answer", "")).strip()
+            if direct_answer and _result_is_relevant(
+                query,
+                heading or query,
+                direct_answer
+            ):
+                return direct_answer
+
+            for field in ("AbstractText", "Definition"):
+                answer = str(data.get(field, "")).strip()
+
+                if answer and _result_is_relevant(
+                    query,
+                    heading or query,
+                    answer
+                ):
+                    sentences = re.split(
+                        r"(?<=[.!?])\s+",
+                        answer
+                    )
+                    return " ".join(sentences[:5]).strip()
+
+    except Exception:
+        pass
+
+    # --------------------------------------------------------
+    # WIKIPEDIA — SEARCH TOP RESULTS, RETURN ONLY RELEVANT ONE
     # --------------------------------------------------------
 
     try:
@@ -874,7 +986,7 @@ def safe_answer(prompt):
                 "action": "query",
                 "list": "search",
                 "srsearch": query,
-                "srlimit": 3,
+                "srlimit": 5,
                 "format": "json"
             },
             headers=headers,
@@ -890,7 +1002,6 @@ def safe_answer(prompt):
 
             for result in results:
                 title = str(result.get("title", "")).strip()
-
                 if not title:
                     continue
 
@@ -926,47 +1037,6 @@ def safe_answer(prompt):
 
     except Exception:
         pass
-
-    # --------------------------------------------------------
-    # DUCKDUCKGO — ONLY RETURN RELEVANT RESULTS
-    # --------------------------------------------------------
-
-    try:
-        ddg = requests.get(
-            "https://api.duckduckgo.com/",
-            params={
-                "q": query,
-                "format": "json",
-                "no_html": 1,
-                "skip_disambig": 0
-            },
-            headers=headers,
-            timeout=5
-        )
-
-        if ddg.ok:
-            data = ddg.json()
-            heading = str(data.get("Heading", "")).strip()
-
-            for field in ("AbstractText", "Answer", "Definition"):
-                answer = str(data.get(field, "")).strip()
-
-                if not answer:
-                    continue
-
-                if _result_is_relevant(
-                    query,
-                    heading or query,
-                    answer
-                ):
-                    return answer
-
-    except Exception:
-        pass
-
-    # --------------------------------------------------------
-    # NO RELIABLE ANSWER = DO NOT GUESS
-    # --------------------------------------------------------
 
     return SAFE_FORWARD_MESSAGE
 
@@ -1539,6 +1609,52 @@ def _answer_relevance_regression():
 
 
 _answer_relevance_regression()
+
+
+# ============================================================
+# SAFE RESPONSE QA REGRESSION
+# ============================================================
+
+def _safe_response_qa_regression():
+    checks = [
+        ("2+2", "4"),
+        ("capital of india", "new delhi"),
+        ("full form of ai", "artificial intelligence"),
+        ("full form of llm", "large language model"),
+        ("what is machine learning", "machine learning"),
+        ("what is artificial intelligence", "artificial intelligence"),
+        ("what is prompt injection", "prompt injection"),
+    ]
+
+    passed = 0
+    total = 0
+
+    for prompt, expected in checks:
+        total += 1
+        answer = safe_answer(prompt).lower()
+        passed += int(expected in answer)
+
+    # Conversational / underspecified prompts must not get random facts.
+    fallback_cases = [
+        "I want to get a pen",
+        "I am going to buy a notebook",
+        "I need some water",
+        "I want a blue shirt",
+        "I feel like getting coffee",
+        "I need to purchase a bag",
+    ]
+
+    for prompt in fallback_cases:
+        total += 1
+        passed += int(safe_answer(prompt) == SAFE_FORWARD_MESSAGE)
+
+    print(
+        f"SAFE_RESPONSE_QA_REGRESSION {passed}/{total} PASSED",
+        flush=True
+    )
+
+
+_safe_response_qa_regression()
 
 
 @app.route("/health")
