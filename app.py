@@ -1,6 +1,8 @@
 
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from difflib import SequenceMatcher
+from urllib.parse import quote
+import requests
 import re, time
 
 app = Flask(__name__)
@@ -304,18 +306,170 @@ def memory_detection(text):
     return best_type, best
 
 def safe_answer(prompt):
+    """
+    Protected response layer for ALLOWED prompts.
+
+    Order:
+    1) Fast predefined answers for common project/demo questions.
+    2) Wikipedia grounded summary.
+    3) DuckDuckGo Instant Answer fallback.
+    4) Clear fallback if no grounded answer is available.
+
+    This runs ONLY after the security gateway allows the prompt.
+    """
     text = normalize(prompt)
+
+    # --------------------------------------------------------
+    # FAST LOCAL ANSWERS
+    # --------------------------------------------------------
+
     if "machine learning" in text:
-        return "Machine learning is a branch of AI that enables computers to learn patterns from data and make predictions or decisions."
-    if "artificial intelligence" in text or text in {"what is ai","what is ai?"}:
-        return "Artificial Intelligence is the field of building computer systems that can perform tasks such as learning, reasoning and decision-making."
+        return (
+            "Machine learning is a branch of Artificial Intelligence "
+            "that enables computers to learn patterns from data and "
+            "make predictions or decisions without being explicitly "
+            "programmed for every situation."
+        )
+
+    if "artificial intelligence" in text or text in {"what is ai", "what is ai?"}:
+        return (
+            "Artificial Intelligence (AI) is the field of building "
+            "computer systems that can perform tasks such as learning, "
+            "reasoning, perception and decision-making."
+        )
+
     if "prompt injection" in text and ("what is" in text or "explain" in text):
-        return "Prompt injection is an attack where malicious instructions are inserted into input to manipulate the intended behavior of an AI application."
+        return (
+            "Prompt injection is an attack in which malicious or "
+            "misleading instructions are inserted into model input "
+            "to manipulate the intended behaviour of an AI application."
+        )
+
     if "kill a process" in text:
-        return "In Linux, find the process ID using ps or pgrep, then use `kill PID` to request normal termination."
-    if re.search(r"\b(protect|secure|prevent)\b", text) and re.search(r"\b(account|hack|password)\b", text):
-        return "Use a strong unique password, enable multi-factor authentication, avoid suspicious links, keep software updated and review login activity."
-    return "This prompt passed the LLM Guard security gateway and was forwarded to the protected response layer."
+        return (
+            "In Linux, identify the process ID using tools such as "
+            "ps, top or pgrep, then use `kill PID` to request normal "
+            "termination. If required, an administrator can use stronger "
+            "termination options carefully."
+        )
+
+    if (
+        re.search(r"\b(protect|secure|prevent|defend)\b", text)
+        and re.search(r"\b(account|hack|password|cyber)\b", text)
+    ):
+        return (
+            "Use a strong unique password, enable multi-factor "
+            "authentication, avoid suspicious links, keep software "
+            "updated and regularly review login activity."
+        )
+
+    # --------------------------------------------------------
+    # CLEAN QUERY FOR GROUNDED LOOKUP
+    # --------------------------------------------------------
+
+    query = re.sub(
+        r"^(who is|what is|what are|who are|tell me about|explain|define|describe)\s+",
+        "",
+        prompt.strip(),
+        flags=re.I
+    ).strip(" ?.!")
+
+    if not query:
+        query = prompt.strip()
+
+    headers = {
+        "User-Agent": "LLMGuardBatch6/1.0 (student project)"
+    }
+
+    # --------------------------------------------------------
+    # WIKIPEDIA
+    # --------------------------------------------------------
+
+    try:
+        search_response = requests.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={
+                "action": "query",
+                "list": "search",
+                "srsearch": query,
+                "srlimit": 1,
+                "format": "json"
+            },
+            headers=headers,
+            timeout=5
+        )
+
+        if search_response.ok:
+            search_data = search_response.json()
+            results = search_data.get("query", {}).get("search", [])
+
+            if results:
+                title = results[0].get("title", "").strip()
+
+                if title:
+                    summary_response = requests.get(
+                        "https://en.wikipedia.org/api/rest_v1/page/summary/"
+                        + quote(title.replace(" ", "_")),
+                        headers=headers,
+                        timeout=5
+                    )
+
+                    if summary_response.ok:
+                        summary = summary_response.json().get("extract", "").strip()
+
+                        if summary:
+                            sentences = re.split(
+                                r"(?<=[.!?])\s+",
+                                summary
+                            )
+
+                            answer = " ".join(sentences[:5]).strip()
+
+                            if answer:
+                                return answer
+
+    except Exception:
+        pass
+
+    # --------------------------------------------------------
+    # DUCKDUCKGO INSTANT ANSWER
+    # --------------------------------------------------------
+
+    try:
+        ddg = requests.get(
+            "https://api.duckduckgo.com/",
+            params={
+                "q": query,
+                "format": "json",
+                "no_html": 1,
+                "skip_disambig": 0
+            },
+            headers=headers,
+            timeout=5
+        )
+
+        if ddg.ok:
+            data = ddg.json()
+
+            for field in ("AbstractText", "Answer", "Definition"):
+                answer = str(data.get(field, "")).strip()
+
+                if answer:
+                    return answer
+
+    except Exception:
+        pass
+
+    # --------------------------------------------------------
+    # FINAL SAFE FALLBACK
+    # --------------------------------------------------------
+
+    return (
+        "This request passed the LLM Guard security gateway, but the "
+        "protected grounded response layer could not find a reliable "
+        "answer for this query. Please rephrase the question more specifically."
+    )
+
 
 def fallback(attack):
     messages = {
