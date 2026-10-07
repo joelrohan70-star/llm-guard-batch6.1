@@ -71,6 +71,36 @@ def normalize(text):
         text
     )
 
+    # Conservative typo correction for dangerous action words only.
+    # This changes only obvious misspellings and leaves all other words untouched.
+    TYPO_ALIASES = {
+        "scrab": "stab",
+        "stabb": "stab",
+        "stabe": "stab",
+        "stabing": "stabbing",
+        "kll": "kill",
+        "kil": "kill",
+        "murdar": "murder",
+        "murdr": "murder",
+        "poision": "poison",
+        "hakc": "hack",
+        "hcak": "hack",
+        "hijak": "hijack",
+        "hijcak": "hijack",
+        "kidnaping": "kidnapping",
+        "explsive": "explosive",
+        "expolsive": "explosive",
+        "scamm": "scam",
+        "stalkk": "stalk",
+        "doxx": "dox",
+        "ransomwear": "ransomware",
+        "malwere": "malware"
+    }
+
+    tokens = text.split()
+    tokens = [TYPO_ALIASES.get(tok, tok) for tok in tokens]
+    text = " ".join(tokens)
+
     # Common explicit forms retained for extra reliability.
     for spaced, joined in {
         "h a c k":"hack",
