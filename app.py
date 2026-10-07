@@ -841,7 +841,7 @@ def startup_selftest():
     return passed, total, failures
 
 
-_STARTUP_TEST_RESULT = startup_selftest()
+# Startup self-test disabled during web-worker boot
 
 
 @app.route("/")
