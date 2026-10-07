@@ -122,14 +122,14 @@ def safe_context(text):
 
     defensive = bool(re.search(
         r"\b(protect|secure|prevent|defend|defensive|mitigate|detect|detection|"
-        r"safety|awareness|warning signs?|security controls?|how to stay safe|"
-        r"how can i protect|how can we protect)\b",
+        r"recognize|recognise|identify|spot|report|safety|awareness|warning signs?|"
+        r"security controls?|how to stay safe|how can i protect|how can we protect)\b",
         text
     ))
 
     academic = bool(re.search(
-        r"\b(what is|what are|define|definition|overview|history|assignment|research|study|"
-        r"for school|for college|for class|educational purposes?|academic purposes?)\b",
+        r"\b(what is|what are|define|definition|explain|why|overview|history|assignment|research|study|"
+        r"for school|for college|for class|for my project|educational purposes?|academic purposes?)\b",
         text
     ))
 
@@ -168,6 +168,8 @@ def signature_detection(text):
     for category, phrases in SIGNATURES.items():
         for phrase in phrases:
             if phrase in text:
+                if safe_context(text) and phrase in {"jailbreak", "developer mode"}:
+                    continue
                 return category, 0.99
 
     # 2) Flexible signatures for the same three existing attack families
@@ -228,7 +230,8 @@ def heuristic_detection(text):
         r"without getting caught|leave no trace|cover my tracks|avoid detection|"
         r"keep it hidden|keep it private|off the radar|no obvious sign|nobody should know|"
         r"no one should know|don't want to explain|do not want to explain|rather not explain|"
-        r"keep the purpose hidden|avoid attention)\b",
+        r"keep the purpose hidden|avoid attention|without being identified|unidentified|"
+        r"silent|silently|leave no sign|leaves no sign|no trace|no visible sign)\b",
         text
     ))
 
@@ -322,8 +325,13 @@ def heuristic_detection(text):
     # --------------------------------------------------------
 
     if re.search(
-        r"\b(harass|threaten|intimidate|terrorize|terrorise|bully|humiliate|"
-        r"send threats|anonymous threats|scare .* into|make .* afraid)\b",
+        r"\b(send threats?|anonymous threats?|threaten|intimidate|terrorize|terrorise)\b",
+        text
+    ):
+        return "HARASSMENT", 0.98
+
+    if re.search(
+        r"\b(harass|bully|humiliate|scare .* into|make .* afraid)\b",
         text
     ) and (operational or stealth or nonconsensual):
         return "HARASSMENT", 0.96
@@ -427,7 +435,7 @@ def heuristic_detection(text):
         text
     ))
 
-    if cyber_action and (cyber_target or nonconsensual or stealth):
+    if cyber_action and (cyber_target or nonconsensual or stealth or operational):
         return "CYBER_ABUSE", 0.98
 
     if security_evasion and (operational or nonconsensual or stealth):
@@ -496,7 +504,7 @@ def heuristic_detection(text):
 
     if re.search(
         r"\b(scam|fraud|phishing scam|steal money|deceive|trick|impersonate|fake payment|"
-        r"carding|launder money|money laundering|fake invoice|fake receipt|steal card|"
+        r"carding|launder money|launder .* money|money laundering|fake invoice|fake receipt|steal card|"
         r"credit card theft|fake identity|forge|forged document)\b",
         text
     ):
@@ -542,6 +550,15 @@ def heuristic_detection(text):
         r"smuggle|counterfeit|hide evidence|destroy evidence|evade police|gaslight|coerce)\b",
         text
     ))
+
+    vague_concealed_intent = bool(
+        stealth
+        and re.search(r"\b(solution|way|method|approach|plan|option|workaround)\b", text)
+        and re.search(r"\b(i want|i need|need a|want a|looking for|there must be|give me|find me)\b", text)
+    )
+
+    if vague_concealed_intent:
+        return "AMBIGUOUS_TWISTED", 0.72
 
     # Score semantic intent signals instead of depending on one phrase.
     score = 0
@@ -614,6 +631,11 @@ def context_analysis(text):
     ))
 
     defensive_or_academic = safe
+
+    # Existing Context Analysis must protect safe hard-negatives such as
+    # "how to kill a process in Linux" and prevention/academic questions.
+    if defensive_or_academic and not concealment and not ownership_violation:
+        return "SAFE_CONTEXT", 0.02
 
     # Strong harmful context
     if harmful_goal and (operational or concealment or ownership_violation):
