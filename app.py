@@ -35,9 +35,12 @@ SIGNATURES = {
 
 def normalize(text):
     text = (text or "").lower().strip()
-    table = str.maketrans({"@":"a","4":"a","3":"e","1":"i","0":"o","$":"s"})
+    table = str.maketrans({
+        "@":"a","4":"a","3":"e","1":"i","!":"i","0":"o","$":"s","5":"s","7":"t"
+    })
     text = text.translate(table)
-    text = re.sub(r"[._\-]+", " ", text)
+    text = re.sub(r"[\u200b-\u200d\uFEFF]", "", text)
+    text = re.sub(r"[._\-/*|~^]+", " ", text)
     text = re.sub(r"\s+", " ", text)
     for spaced, joined in {
         "h a c k":"hack",
@@ -48,21 +51,54 @@ def normalize(text):
         "a c c o u n t":"account",
         "l o g i n":"login",
         "a c c e s s":"access",
+        "s t e a l":"steal",
+        "w e a p o n":"weapon",
+        "s c a m":"scam",
     }.items():
         text = text.replace(spaced, joined)
     return text.strip()
 
+
 def safe_context(text):
-    if re.search(r"\b(kill|terminate)\s+(a\s+)?(linux\s+)?process\b", text):
+    # Concealed intent should never be mistaken for an educational prompt
+    if re.search(
+        r"\b(do not want to explain|don't want to explain|rather not explain|won't explain|"
+        r"cannot explain (the )?(purpose|reason)|keep the purpose hidden)\b",
+        text
+    ):
+        return False
+
+    if re.search(r"\b(kill|terminate|stop)\s+(a\s+)?(linux\s+)?process\b", text):
         return True
+
     if re.search(r"\b(prescribed|prescription|doctor|pharmacist|medicine|medication)\b", text):
         return True
-    if re.search(r"\b(protect|secure|prevent|defend|mitigate|detect|safety)\b", text) and \
-       re.search(r"\b(account|password|hack|hacking|cyber|website|system|network)\b", text):
+
+    if re.search(r"\b(bomb calorimeter|population explosion|explosive growth)\b", text):
         return True
-    if re.search(r"\b(explain|definition|what is|what are|assignment|research|study|awareness|history|prevention)\b", text):
-        return True
-    return False
+
+    educational = bool(re.search(
+        r"\b(what is|what are|define|definition|explain|overview|history|assignment|research|study|"
+        r"awareness|prevention|prevent|protect|defend|defensive|mitigate|detection|detect|safety|"
+        r"risks?|security controls?)\b",
+        text
+    ))
+
+    operational = bool(re.search(
+        r"\b(how to|how can i|tell me how|teach me how|steps?|step by step|procedure|instructions?|"
+        r"guide me|help me (to )?|best way|easiest way|secret way|quiet way|method to|ways? to|"
+        r"exact commands?|exact steps?|working code|payload|script to)\b",
+        text
+    ))
+
+    ownership_safe = bool(re.search(
+        r"\b(my own|our own|authorized|authorised|with permission|permission granted|lab|ctf|sandbox|"
+        r"test environment|training environment)\b",
+        text
+    ))
+
+    return educational and (not operational or ownership_safe)
+
 
 def signature_detection(text):
     for category, phrases in SIGNATURES.items():
@@ -74,58 +110,189 @@ def signature_detection(text):
 def heuristic_detection(text):
     safe = safe_context(text)
 
-    if re.search(r"\b(kill myself|end my life|commit suicide|hurt myself|cut myself|die by suicide)\b", text):
+    # Self-harm intent
+    if re.search(
+        r"\b(kill myself|end my life|commit suicide|hurt myself|cut myself|die by suicide|suicide method)\b",
+        text
+    ):
         return "SELF_HARM", 0.99
 
     if not safe:
+        # Direct violence / coercion
+        violent_action = bool(re.search(
+            r"\b(kill|murder|stab|shoot|strangle|poison|assassinate|hurt|harm|attack|beat|torture|"
+            r"kidnap|abduct|rape|sexually assault|silence permanently)\b",
+            text
+        ))
+        human_target = bool(re.search(
+            r"\b(person|someone|somebody|people|girl|woman|women|boy|man|child|victim|teacher|friend|"
+            r"crowd|family|neighbour|neighbor|employee|boss|classmate)\b",
+            text
+        ))
+        if violent_action and human_target:
+            return "VIOLENCE_HARMFUL", 0.99
+
+        # Euphemistic violence
         if re.search(
-            r"\b(kill|murder|stab|shoot|strangle|poison|assassinate|hurt|harm|attack)\b.{0,100}"
-            r"\b(girl|woman|women|boy|man|person|someone|somebody|child|people|victim)\b",
+            r"\b(make (him|her|them|someone) disappear|(him|her|them|someone|that person) gone permanently|"
+            r"never wake up again|get rid of (him|her|them|someone)|"
+            r"take (him|her|them|someone) out permanently|"
+            r"put (him|her|them|someone) out of the picture|"
+            r"remove (him|her|them|someone) permanently)\b",
             text
         ):
             return "VIOLENCE_HARMFUL", 0.99
 
-        if re.search(
-            r"\b(hack|crack|phish|breach|take over|break into|compromise|bypass)\b.{0,120}"
-            r"\b(account|password|login|email|instagram|facebook|wifi|server|system|database|website|phone)\b",
+        # Hijacking / hostage / public takeover
+        takeover_action = bool(re.search(
+            r"\b(hijack|hostage|seize|storm|occupy|take over|commandeer)\b",
             text
-        ):
-            return "CYBER_ABUSE", 0.98
+        ))
+        takeover_target = bool(re.search(
+            r"\b(mall|school|college|building|airport|plane|aircraft|bus|train|vehicle|office|hospital|"
+            r"place|crowd|people|ship|boat|metro|station|classroom)\b",
+            text
+        ))
+        if takeover_action and takeover_target:
+            return "VIOLENCE_HARMFUL", 0.99
 
-        if re.search(
-            r"\b(take|consume|inject|snort|smoke|use|buy|sell|prepare)\b.{0,90}"
-            r"\b(cocaine|heroin|meth|methamphetamine|fentanyl|mdma|illegal drugs?|narcotics?)\b",
+        # Weapons / explosives / arson
+        weapon_action = bool(re.search(
+            r"\b(make|build|construct|assemble|create|prepare|detonate|ignite|use|hide)\b",
             text
-        ):
-            return "DRUGS", 0.98
-
-        if re.search(
-            r"\b(make|build|construct|assemble|detonate|use)\b.{0,100}"
-            r"\b(bomb|explosive|grenade|weapon|detonator|ied)\b",
+        ))
+        weapon_target = bool(re.search(
+            r"\b(bomb|explosive|grenade|molotov|weapon|detonator|ied|incendiary|firebomb)\b",
             text
-        ):
+        ))
+        if weapon_action and weapon_target:
             return "WEAPONS", 0.99
 
-        if re.search(r"\b(scam|fraud|deceive|trick|impersonate)\b.{0,100}\b(money|payment|victim|customer|person|bank|financial)\b", text):
+        if re.search(
+            r"\b(arson|set .* on fire|burn down|torch a building|start a fire without being caught)\b",
+            text
+        ):
+            return "WEAPONS", 0.98
+
+        # Cyber abuse
+        cyber_action = bool(re.search(
+            r"\b(hack|crack|phish|breach|take over|break into|compromise|bypass|steal credentials|"
+            r"credential stuff|brute force|keylog|malware|ransomware|ddos|botnet|exploit|session hijack|"
+            r"steal token|steal password|evade authentication|circumvent authentication|get past login|"
+            r"get around login|defeat verification)\b",
+            text
+        ))
+        cyber_target = bool(re.search(
+            r"\b(account|password|login|email|instagram|facebook|wifi|router|server|system|database|website|"
+            r"phone|computer|network|cloud|api|device|session|token|otp|2fa|authentication|verification)\b",
+            text
+        ))
+        unauthorized = bool(re.search(
+            r"\b(without permission|not mine|isn't mine|someone else|someone else's|another person's|"
+            r"unauthorized|secretly|without the owner|without them knowing|stealth|leave no trace|"
+            r"avoid detection|without being noticed|without raising attention)\b",
+            text
+        ))
+        if cyber_action and (cyber_target or unauthorized):
+            return "CYBER_ABUSE", 0.98
+
+        # Drugs
+        drug_action = bool(re.search(
+            r"\b(take|consume|inject|snort|smoke|use|buy|sell|obtain|prepare|manufacture|cook)\b",
+            text
+        ))
+        drug_target = bool(re.search(
+            r"\b(cocaine|heroin|meth|methamphetamine|fentanyl|mdma|ecstasy|illegal drugs?|narcotics?)\b",
+            text
+        ))
+        if drug_action and drug_target:
+            return "DRUGS", 0.98
+
+        # Fraud
+        if re.search(
+            r"\b(scam|fraud|phishing scam|steal money|deceive|trick|impersonate|fake payment|carding|"
+            r"launder money|money laundering|fake invoice|fake receipt|steal card|credit card theft)\b",
+            text
+        ):
             return "FRAUD", 0.97
 
-        if re.search(r"\b(track|stalk|monitor|watch|collect private|obtain private)\b.{0,120}\b(person|someone|individual|user|movements|information|details)\b", text) and \
-           re.search(r"\b(secret|without permission|without them knowing|quietly|private)\b", text):
+        # Privacy abuse / stalking / doxxing
+        if re.search(
+            r"\b(dox|doxx|stalk|secretly track|track someone|monitor someone|spy on|obtain private information|"
+            r"private details|location without|find someone's home address|track their location|watch them secretly)\b",
+            text
+        ):
             return "PRIVACY_ABUSE", 0.97
 
+        # Generic harmful operational intent
+        operational = bool(re.search(
+            r"\b(how to|how can i|tell me how|teach me|steps?|method|procedure|instructions?|best way|"
+            r"easiest way|secret way|quiet way|help me|working way|practical way|exact way)\b",
+            text
+        ))
+        harmful_concept = bool(re.search(
+            r"\b(kill|murder|hurt|harm|hijack|kidnap|hostage|bomb|explosive|weapon|hack|breach|bypass|"
+            r"cocaine|heroin|meth|fentanyl|fraud|scam|stalk|dox|rape|arson|steal|sabotage)\b",
+            text
+        ))
+        if operational and harmful_concept:
+            return "AMBIGUOUS_TWISTED", 0.75
+
+    # Twisted / indirect / concealed intent
     conceal = bool(re.search(
-        r"\b(without being noticed|quietly|without the owner knowing|without permission|without leaving|"
-        r"without anyone finding out|keep it secret|do not want to explain|don't want to explain|"
-        r"rather not explain|without raising attention)\b", text
+        r"\b(without being noticed|secretly|quiet|quietly|without the owner knowing|without the owner noticing|"
+        r"without permission|without leaving|without anyone finding out|keep it secret|keep the purpose hidden|"
+        r"do not want to explain|don't want to explain|rather not explain|without raising attention|"
+        r"leave no trace|avoid detection|make it look accidental|appear harmless|keep it off the radar|"
+        r"cover my tracks|no obvious sign|nobody should know|no one should know|without getting caught)\b",
+        text
     ))
+
     suspicious_goal = bool(re.search(
-        r"\b(get around|bypass|gain access|unauthorized access|take control|get inside|protected area|"
-        r"private access|make .* disappear|make .* unusable|permanently solved|destructive solution)\b", text
+        r"\b(get around|way around|bypass|gain access|unauthorized access|take control|get inside|protected area|"
+        r"private access|make .* disappear|make .* unusable|remove .* permanently|permanently solved|"
+        r"destructive solution|someone out of the picture|get rid of|access (to )?something that is not mine|"
+        r"access (to )?something that isn't mine|get past .* checks?|avoid .* verification|"
+        r"defeat .* security|make .* stop working|shut .* down|disable .* without permission|sabotage)\b",
+        text
     ))
-    if not safe and conceal and suspicious_goal:
-        return "AMBIGUOUS_TWISTED", 0.55
+
+    ownership_violation = bool(re.search(
+        r"\b(not mine|isn't mine|doesn't belong to me|someone else's|another person's|without permission|"
+        r"without consent|owner doesn't know|owner would not approve|owner wouldn't approve)\b",
+        text
+    ))
+
+    destructive_outcome = bool(re.search(
+        r"\b(destroy|disable|wipe|erase permanently|make unusable|make disappear|gone permanently|"
+        r"never wake up|permanently remove|shut down|sabotage|ruin|take down)\b",
+        text
+    ))
+
+    signals = sum(bool(x) for x in [
+        conceal,
+        suspicious_goal,
+        ownership_violation,
+        destructive_outcome
+    ])
+
+    # Conservative ambiguity handling: suspicious + unclear is blocked
+    if not safe and signals >= 2:
+        return "AMBIGUOUS_TWISTED", 0.78
+
+    if not safe and suspicious_goal and (conceal or ownership_violation):
+        return "AMBIGUOUS_TWISTED", 0.78
+
+    # Final dangerous-concept gate: risky concepts never silently become CLEAN
+    if not safe and re.search(
+        r"\b(kill|murder|hijack|kidnap|hostage|bomb|explosive|weapon|hack|breach|bypass|"
+        r"cocaine|heroin|meth|fentanyl|fraud|scam|stalk|dox|rape|arson|sabotage|steal)\b",
+        text
+    ):
+        return "AMBIGUOUS_TWISTED", 0.58
 
     return None, 0.0
+
 
 def memory_detection(text):
     best, best_type = 0.0, None
@@ -168,6 +335,7 @@ def fallback(attack):
 
 def analyse_prompt(prompt):
     global stats
+
     raw = (prompt or "").strip()
     text = normalize(raw)
     stats["total"] += 1
@@ -185,14 +353,15 @@ def analyse_prompt(prompt):
     heur_type, heur = heuristic_detection(text)
     mem_type, mem = memory_detection(text)
 
+    # ML is explicitly demo-mode until trained weights are deployed
     if sig >= .90:
         ml = .96
     elif heur >= .90:
         ml = .95
+    elif heur_type == "AMBIGUOUS_TWISTED":
+        ml = .70
     elif mem >= MEMORY_THRESHOLD:
         ml = .94
-    elif heur_type == "AMBIGUOUS_TWISTED":
-        ml = .50
     else:
         ml = .02
 
@@ -204,11 +373,17 @@ def analyse_prompt(prompt):
         attack = "ADAPTIVE_MEMORY_MATCH"
         risk = max(risk, .96)
         reason = "A highly similar previously blocked threat was detected."
+
     elif heur_type == "AMBIGUOUS_TWISTED":
-        risk = max(risk, .45)
-        reason = "Potentially harmful intent was detected but the purpose is unclear. Clarification is required."
+        risk = max(risk, .58)
+        reason = (
+            "Potentially harmful, concealed or unclear intent was detected. "
+            "Clarification is required."
+        )
+
     elif heur_type:
         reason = f"{heur_type.replace('_',' ').title()} indicators were detected."
+
     elif sig_type:
         reason = "A high-confidence prompt attack signature was detected."
 
@@ -216,18 +391,28 @@ def analyse_prompt(prompt):
         status = "BLOCKED"
         stats["blocked"] += 1
         forwarding = "BLOCKED"
+
         if attack == "AMBIGUOUS_TWISTED":
             stats["clarify"] += 1
             action = "REQUEST CLARIFICATION"
-            response = "The intent is unclear and potentially harmful. Please clearly state the safe, educational, defensive, medical or legitimate purpose."
+            response = (
+                "The intent is unclear and potentially harmful. "
+                "Please clearly state the safe, educational, defensive, "
+                "medical or legitimate purpose."
+            )
         else:
             action = "SAFE FALLBACK"
             response = fallback(attack)
-        old = memory.get(text, {"attack":attack,"hits":0,"first_seen":int(time.time())})
+
+        old = memory.get(
+            text,
+            {"attack":attack,"hits":0,"first_seen":int(time.time())}
+        )
         old["attack"] = attack
         old["hits"] = int(old.get("hits",0)) + 1
         old["last_seen"] = int(time.time())
         memory[text] = old
+
     else:
         status = "ALLOWED"
         attack = "CLEAN"
@@ -235,14 +420,19 @@ def analyse_prompt(prompt):
         forwarding = "ALLOWED"
         action = "PROTECTED RESPONSE"
         response = safe_answer(raw)
-        reason = f"Final malicious risk {risk*100:.2f}% is within the configured 40% threshold."
+        reason = (
+            f"Final malicious risk {risk*100:.2f}% "
+            f"is within the configured 40% threshold."
+        )
 
     return {
         "status":status,"attack":attack,"risk":round(float(risk),4),
         "signature":round(float(sig),4),"heuristic":round(float(heur),4),
         "ml":round(float(ml),4),"memory":round(float(mem),4),
-        "response":response,"reason":reason,"action":action,"forwarding":forwarding
+        "response":response,"reason":reason,
+        "action":action,"forwarding":forwarding
     }
+
 
 def memory_items():
     return [{"prompt":p,"attack":i["attack"],"hits":i.get("hits",1)} for p,i in list(memory.items())[-20:][::-1]]
