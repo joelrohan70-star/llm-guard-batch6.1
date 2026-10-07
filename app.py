@@ -317,6 +317,103 @@ def heuristic_detection(text):
     if not safe and suspicious_goal and (conceal or ownership_violation):
         return "AMBIGUOUS_TWISTED", 0.78
 
+    # ========================================================
+    # GENERALIZED INTENT-SIGNAL FUSION
+    #
+    # This is the last broad safety net for paraphrases that do
+    # not match one exact sentence. It looks at combinations of
+    # action + target + ownership/consent + concealment + purpose.
+    # ========================================================
+
+    operational_request = bool(re.search(
+        r"\b(how|how do i|how can i|tell me|show me|teach me|guide me|what should i do|"
+        r"give me steps|give me a way|need a way|want to|need to|help me|can i|"
+        r"best method|easiest method|quick way|quiet way|secret way)\b",
+        text
+    ))
+
+    generic_access_action = bool(re.search(
+        r"\b(access|enter|get in|get into|open|unlock|control|take control|view|read|see|"
+        r"check|copy|download|retrieve|obtain|monitor|watch|track|listen|record|use|"
+        r"connect to|log into|sign into|break into|reach|look through|go through)\b",
+        text
+    ))
+
+    digital_or_private_target = bool(re.search(
+        r"\b(mobile|phone|smartphone|device|laptop|computer|tablet|account|email|mail|"
+        r"whatsapp|telegram|messages?|chats?|photos?|gallery|files?|camera|microphone|"
+        r"location|contacts?|password|otp|pin|login|cloud|drive|social media|instagram|"
+        r"facebook|wifi|router|network|server|database|website|profile)\b",
+        text
+    ))
+
+    nonconsensual = bool(re.search(
+        r"\b(someone'?s|somebody'?s|another person'?s|another user's|their|his|her|"
+        r"not mine|isn't mine|doesn't belong to me|without permission|without consent|"
+        r"without approval|unauthorized|owner doesn't know|owner wouldn't approve|"
+        r"owner would not approve|without asking)\b",
+        text
+    ))
+
+    stealth = bool(re.search(
+        r"\b(secretly|quietly|unnoticed|without being noticed|without them knowing|"
+        r"without the owner knowing|without the owner noticing|without anyone finding out|"
+        r"without getting caught|leave no trace|cover my tracks|avoid detection|"
+        r"keep it hidden|keep it private|off the radar|no obvious sign|nobody should know|"
+        r"no one should know|don't want to explain|do not want to explain|rather not explain)\b",
+        text
+    ))
+
+    security_evasion = bool(re.search(
+        r"\b(bypass|get around|way around|get past|circumvent|evade|defeat|skip|avoid)\b.{0,80}"
+        r"\b(login|password|pin|otp|2fa|authentication|verification|security|protection|restriction|check|guard|filter)\b",
+        text
+    ))
+
+    harmful_result = bool(re.search(
+        r"\b(destroy|damage|disable|wipe|erase|delete permanently|make unusable|make disappear|"
+        r"take down|shut down|sabotage|ruin|harm|hurt|kill|remove permanently|"
+        r"steal|take without permission|force|threaten|blackmail|extort)\b",
+        text
+    ))
+
+    dangerous_object = bool(re.search(
+        r"\b(bomb|explosive|weapon|grenade|firebomb|malware|ransomware|keylogger|"
+        r"cocaine|heroin|meth|fentanyl|stolen card|stolen credentials)\b",
+        text
+    ))
+
+    # Non-consensual access to another person's private/digital target.
+    if (
+        not safe
+        and generic_access_action
+        and digital_or_private_target
+        and (nonconsensual or stealth)
+    ):
+        if re.search(
+            r"\b(messages?|chats?|photos?|gallery|camera|microphone|location|contacts?|files?)\b",
+            text
+        ):
+            return "PRIVACY_ABUSE", 0.99
+        return "CYBER_ABUSE", 0.99
+
+    # Security-control evasion with suspicious purpose.
+    if not safe and security_evasion and (operational_request or nonconsensual or stealth):
+        return "CYBER_ABUSE", 0.98
+
+    # Operational request + destructive outcome is treated as harmful/uncertain
+    # even when wording avoids obvious attack keywords.
+    if not safe and operational_request and harmful_result:
+        return "AMBIGUOUS_TWISTED", 0.82
+
+    # Concealed action + non-consent + target is a strong twisted-intent signal.
+    if not safe and stealth and nonconsensual and (generic_access_action or harmful_result):
+        return "AMBIGUOUS_TWISTED", 0.82
+
+    # Dangerous object + operational request should not pass as CLEAN.
+    if not safe and dangerous_object and operational_request:
+        return "AMBIGUOUS_TWISTED", 0.82
+
     # Final dangerous-concept gate: risky concepts never silently become CLEAN
     if not safe and re.search(
         r"\b(kill|murder|hijack|kidnap|hostage|bomb|explosive|weapon|hack|breach|bypass|"
