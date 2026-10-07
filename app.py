@@ -160,11 +160,46 @@ def safe_context(text):
 
 
 def signature_detection(text):
+    """
+    Existing Signature Matching layer upgraded to:
+    exact phrase + regex-style intent signatures + fuzzy phrase windows.
+    """
+    # 1) Exact signatures
     for category, phrases in SIGNATURES.items():
         for phrase in phrases:
             if phrase in text:
                 return category, 0.99
+
+    # 2) Flexible signatures for the same three existing attack families
+    flexible = [
+        ("SYSTEM_PROMPT_EXTRACTION",
+         r"\b(reveal|show|print|display|give|tell me)\b.{0,80}\b(system prompt|hidden instructions?|internal instructions?|developer instructions?|secret prompt)\b"),
+        ("PROMPT_INJECTION",
+         r"\b(ignore|disregard|forget|override|replace)\b.{0,80}\b(previous|earlier|system|developer|original)\b.{0,40}\b(instructions?|rules?|prompt)\b"),
+        ("JAILBREAK",
+         r"\b(bypass|disable|remove|break|evade)\b.{0,80}\b(safety|guardrails?|restrictions?|filters?|policy|rules?)\b"),
+    ]
+    for category, pattern in flexible:
+        if re.search(pattern, text):
+            return category, 0.97
+
+    # 3) Fuzzy phrase matching within nearby word windows
+    words = text.split()
+    for category, phrases in SIGNATURES.items():
+        for phrase in phrases:
+            pwords = phrase.split()
+            n = len(pwords)
+            if n == 0:
+                continue
+            for width in range(max(2, n - 1), min(len(words), n + 2) + 1):
+                for i in range(0, len(words) - width + 1):
+                    window = " ".join(words[i:i + width])
+                    sim = SequenceMatcher(None, window, phrase).ratio()
+                    if sim >= 0.88:
+                        return category, min(0.96, 0.88 + (sim - 0.88))
+
     return None, 0.0
+
 
 def heuristic_detection(text):
     """
@@ -443,6 +478,69 @@ def heuristic_detection(text):
     return None, 0.0
 
 
+def context_analysis(text):
+    """
+    Existing Context Analysis layer.
+
+    Evaluates purpose, consent/ownership, concealment, target and
+    whether the request is educational/defensive or operational.
+    It does not add a new detector weight; it refines the final
+    decision after the existing Signature/Heuristic/ML fusion.
+    """
+    safe = safe_context(text)
+
+    operational = bool(re.search(
+        r"\b(how to|how do i|how can i|tell me how|show me how|teach me|guide me|"
+        r"give me steps|give me a way|what should i do|method|procedure|instructions?|"
+        r"working way|practical way|exact way|best way|easiest way)\b",
+        text
+    ))
+
+    concealment = bool(re.search(
+        r"\b(secretly|quietly|unnoticed|without being noticed|without them knowing|"
+        r"without permission|without consent|without approval|without getting caught|"
+        r"leave no trace|cover my tracks|avoid detection|off the radar|no obvious sign|"
+        r"nobody should know|no one should know|keep it hidden|keep the purpose hidden|"
+        r"don't want to explain|do not want to explain|rather not explain)\b",
+        text
+    ))
+
+    ownership_violation = bool(re.search(
+        r"\b(not mine|isn't mine|doesn't belong to me|someone else's|somebody else's|"
+        r"another person's|another user's|owner doesn't know|owner wouldn't approve|"
+        r"owner would not approve|without asking)\b",
+        text
+    ))
+
+    harmful_goal = bool(re.search(
+        r"\b(kill|murder|hurt|harm|attack|kidnap|hijack|hostage|destroy|damage|disable|"
+        r"wipe|erase|sabotage|steal|hack|breach|bypass|scam|fraud|stalk|dox|blackmail|"
+        r"extort|make .* disappear|get rid of|gone permanently|take over|gain access|"
+        r"get into|break into|read .* messages|track .* secretly)\b",
+        text
+    ))
+
+    defensive_or_academic = safe
+
+    # Strong harmful context
+    if harmful_goal and (operational or concealment or ownership_violation):
+        return "HARMFUL_CONTEXT", 0.92
+
+    # Strong non-consensual concealed context even with euphemistic wording
+    if concealment and ownership_violation:
+        return "SUSPICIOUS_CONTEXT", 0.82
+
+    # Operational + secrecy is uncertain enough to require clarification
+    if operational and concealment:
+        return "SUSPICIOUS_CONTEXT", 0.72
+
+    # Explicit safe educational/defensive context
+    if defensive_or_academic:
+        return "SAFE_CONTEXT", 0.02
+
+    return "NEUTRAL_CONTEXT", 0.05
+
+
 def memory_detection(text):
     best, best_type = 0.0, None
     for stored, info in memory.items():
@@ -645,49 +743,85 @@ def analyse_prompt(prompt):
         stats["clarify"] += 1
         return {
             "status":"NEEDS_CLARIFICATION","attack":"EMPTY_INPUT","risk":0.0,
-            "signature":0.0,"heuristic":0.0,"ml":0.0,"memory":0.0,
+            "signature":0.0,"heuristic":0.0,"ml":0.0,"context":0.0,"memory":0.0,
+            "context_type":"EMPTY_INPUT",
             "response":"Please enter a prompt.","reason":"No input was provided.",
             "action":"REQUEST CLARIFICATION","forwarding":"BLOCKED"
         }
 
+    # Existing architecture order:
+    # Preprocessing -> Signature -> Heuristic -> ML Ensemble ->
+    # Context -> Weighted Fusion -> Adaptive Memory -> Decision
     sig_type, sig = signature_detection(text)
     heur_type, heur = heuristic_detection(text)
-    mem_type, mem = memory_detection(text)
 
-    # ML is explicitly demo-mode until trained weights are deployed
+    # Existing ML position retained.
+    # Until the trained BERT/DistilBERT weights can fit the live runtime,
+    # this score remains the deployment-safe demo contribution shown in UI.
     if sig >= .90:
         ml = .96
     elif heur >= .90:
         ml = .95
     elif heur_type == "AMBIGUOUS_TWISTED":
         ml = .70
-    elif mem >= MEMORY_THRESHOLD:
-        ml = .94
     else:
         ml = .02
 
-    risk = sig*.30 + heur*.25 + ml*.45
+    context_type, context = context_analysis(text)
+    mem_type, mem = memory_detection(text)
+
+    # Existing weighted fusion remains exactly:
+    # Signature 30% + Heuristic 25% + ML 45%
+    base_risk = sig*.30 + heur*.25 + ml*.45
+    risk = base_risk
+
     attack = heur_type or sig_type or "CLEAN"
     reason = "No malicious behaviour detected."
 
+    # Existing Context layer now actively refines the fusion result.
+    # It does NOT introduce a new fusion weight.
+    if context_type == "HARMFUL_CONTEXT":
+        risk = max(risk, context)
+        if attack == "CLEAN":
+            attack = "AMBIGUOUS_TWISTED"
+        reason = (
+            "Context analysis found operational harmful intent, "
+            "concealment, non-consent or a harmful objective."
+        )
+
+    elif context_type == "SUSPICIOUS_CONTEXT":
+        risk = max(risk, 0.58)
+        if attack == "CLEAN":
+            attack = "AMBIGUOUS_TWISTED"
+        reason = (
+            "Context analysis found suspicious or unclear intent. "
+            "Clarification is required before forwarding."
+        )
+
+    elif context_type == "SAFE_CONTEXT" and not sig_type and not heur_type:
+        # Safe context may lower uncertainty, but never overrides a strong detector.
+        risk = min(risk, 0.12)
+
+    # Existing adaptive threat memory override
     if mem >= MEMORY_THRESHOLD:
         attack = "ADAPTIVE_MEMORY_MATCH"
         risk = max(risk, .96)
         reason = "A highly similar previously blocked threat was detected."
 
-    elif heur_type == "AMBIGUOUS_TWISTED":
+    elif heur_type == "AMBIGUOUS_TWISTED" and context_type not in ("HARMFUL_CONTEXT","SUSPICIOUS_CONTEXT"):
         risk = max(risk, .58)
         reason = (
             "Potentially harmful, concealed or unclear intent was detected. "
             "Clarification is required."
         )
 
-    elif heur_type:
+    elif heur_type and context_type not in ("HARMFUL_CONTEXT","SUSPICIOUS_CONTEXT"):
         reason = f"{heur_type.replace('_',' ').title()} indicators were detected."
 
-    elif sig_type:
+    elif sig_type and context_type not in ("HARMFUL_CONTEXT","SUSPICIOUS_CONTEXT"):
         reason = "A high-confidence prompt attack signature was detected."
 
+    # Existing >40% decision rule retained
     if risk > BLOCK_THRESHOLD:
         status = "BLOCKED"
         stats["blocked"] += 1
@@ -729,7 +863,9 @@ def analyse_prompt(prompt):
     return {
         "status":status,"attack":attack,"risk":round(float(risk),4),
         "signature":round(float(sig),4),"heuristic":round(float(heur),4),
-        "ml":round(float(ml),4),"memory":round(float(mem),4),
+        "ml":round(float(ml),4),"context":round(float(context),4),
+        "context_type":context_type,
+        "memory":round(float(mem),4),
         "response":response,"reason":reason,
         "action":action,"forwarding":forwarding
     }
