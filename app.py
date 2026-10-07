@@ -176,6 +176,38 @@ def heuristic_detection(text):
         ):
             return "WEAPONS", 0.98
 
+        # Unauthorized access to another person's device/data.
+        # This catches indirect wording such as:
+        # "access someone's mobile secretly", "read their messages without them knowing",
+        # and "get into another person's phone".
+        access_action = bool(re.search(
+            r"\b(access|get into|enter|open|unlock|control|take control|view|read|see|check|copy|download|"
+            r"browse|inspect|use|retrieve|obtain|monitor)\b",
+            text
+        ))
+        private_target = bool(re.search(
+            r"\b(mobile|phone|smartphone|device|account|email|messages?|chats?|whatsapp|telegram|"
+            r"photos?|gallery|files?|camera|microphone|location|contacts?|password|otp|pin|login|"
+            r"cloud|drive|social media|instagram|facebook)\b",
+            text
+        ))
+        third_party = bool(re.search(
+            r"\b(someone'?s|somebody'?s|another person'?s|another user's|their|his|her|not mine|"
+            r"isn't mine|doesn't belong to me|owner's)\b",
+            text
+        ))
+        secret_or_unauthorized = bool(re.search(
+            r"\b(secretly|without permission|without consent|without them knowing|without the owner knowing|"
+            r"without the owner noticing|without being noticed|quietly|unnoticed|without getting caught|"
+            r"leave no trace|cover my tracks|unauthorized|without approval)\b",
+            text
+        ))
+
+        if access_action and private_target and (third_party or secret_or_unauthorized):
+            if re.search(r"\b(messages?|chats?|photos?|gallery|camera|microphone|location|contacts?|files?)\b", text):
+                return "PRIVACY_ABUSE", 0.99
+            return "CYBER_ABUSE", 0.99
+
         # Cyber abuse
         cyber_action = bool(re.search(
             r"\b(hack|crack|phish|breach|take over|break into|compromise|bypass|steal credentials|"
@@ -185,7 +217,7 @@ def heuristic_detection(text):
             text
         ))
         cyber_target = bool(re.search(
-            r"\b(account|password|login|email|instagram|facebook|wifi|router|server|system|database|website|"
+            r"\b(account|password|login|email|instagram|facebook|wifi|router|server|system|database|website|mobile|"
             r"phone|computer|network|cloud|api|device|session|token|otp|2fa|authentication|verification)\b",
             text
         ))
