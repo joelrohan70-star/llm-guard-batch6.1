@@ -1316,6 +1316,27 @@ def selftest():
     })
 
 
+# ============================================================
+# SECURITY REGRESSION CHECK
+# Tests the existing architecture at worker startup.
+# ============================================================
+
+try:
+    with app.app_context():
+        _reg = selftest().get_json()
+        print(
+            f"LLM_GUARD_REGRESSION {_reg['passed']}/{_reg['total']} PASSED "
+            f"(failed={_reg['failed']})",
+            flush=True
+        )
+        if _reg["failed"]:
+            for _item in _reg["results"]:
+                if not _item["pass"]:
+                    print("REGRESSION_FAIL", _item, flush=True)
+except Exception as _e:
+    print("LLM_GUARD_REGRESSION_ERROR", repr(_e), flush=True)
+
+
 @app.route("/health")
 def health():
     return {"status":"ok"}, 200
