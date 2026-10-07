@@ -1,0 +1,64 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#07111f">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<title>LLM Guard</title>
+<style>
+:root{--bg:#07111f;--card:#101e31;--card2:#172942;--border:#294564;--text:#f7fbff;--muted:#91a7c0;--blue:#3478f6;--green:#21bf7c;--red:#ef5265;--amber:#f3a323}
+body.light{--bg:#eef4fa;--card:#fff;--card2:#f5f8fc;--border:#ccdbea;--text:#10213a;--muted:#667d97}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Segoe UI,Arial,sans-serif}.app{max-width:1150px;margin:auto;padding:14px}.header{display:flex;justify-content:space-between;align-items:center;padding:15px;border:1px solid var(--border);background:var(--card);border-radius:20px}.brand{display:flex;align-items:center;gap:11px}.logo{width:48px;height:48px;border-radius:14px;background:var(--blue);display:grid;place-items:center;font-size:27px}.title{font-size:21px;font-weight:800}.sub,.muted{font-size:11px;color:var(--muted)}.active{font-size:10px;color:var(--green);border:1px solid var(--green);padding:7px 9px;border-radius:999px;font-weight:800}.tabs{display:flex;gap:6px;overflow:auto;margin:10px 0}.btn{background:var(--card);color:var(--text);border:1px solid var(--border);padding:10px 12px;border-radius:12px;font-weight:700;cursor:pointer;white-space:nowrap}.btn.primary,.tab.active{background:var(--blue);color:#fff;border-color:var(--blue)}.page{display:none}.page.active{display:block}.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:9px}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}.card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:14px}.metric b{display:block;font-size:26px}.allowed{border-left:4px solid var(--green)}.blocked{border-left:4px solid var(--red)}.clarify{border-left:4px solid var(--amber)}textarea{width:100%;min-height:120px;background:var(--card2);color:var(--text);border:1px solid var(--border);border-radius:13px;padding:12px}.decision{margin-top:10px}.decision h2{margin:5px 0}.track{height:8px;background:var(--card2);border-radius:99px;overflow:hidden;margin:10px 0}.fill{height:100%;background:var(--blue)}pre{white-space:pre-wrap;background:var(--card2);border:1px solid var(--border);border-radius:12px;padding:11px;color:var(--text)}.pipe,.threat{background:var(--card2);border:1px solid var(--border);border-radius:11px;padding:9px;margin:6px 0}.install{display:none;margin:10px 0}.install.show{display:flex;justify-content:space-between;align-items:center}.system-row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)}.online{color:var(--green);font-weight:800}.demo{color:var(--amber);font-weight:800}@media(max-width:700px){.grid4{grid-template-columns:1fr 1fr}.grid2{grid-template-columns:1fr}.title{font-size:18px}.active{font-size:8px}}
+</style>
+</head>
+<body>
+<div class="app">
+<div class="header"><div class="brand"><div class="logo">⛨</div><div><div class="title">LLM Guard</div><div class="sub">Adaptive & Explainable AI Security Gateway</div></div></div><div class="active">● PROTECTION ACTIVE</div></div>
+
+<div id="install" class="card install"><div><b>Install LLM Guard</b><div class="muted">Add it to your phone like an app.</div></div><button id="installBtn" class="btn primary">Install App</button></div>
+
+<div class="tabs">
+<button class="btn tab active" data-page="home">⌂ Home</button>
+<button class="btn tab" data-page="analyse">◈ Analyse</button>
+<button class="btn tab" data-page="dashboard">▥ Dashboard</button>
+<button class="btn tab" data-page="memory">◉ Threat Memory</button>
+<button class="btn tab" data-page="system">⚙ System</button>
+<button id="theme" class="btn">☀/🌙</button>
+</div>
+
+<section id="home" class="page active">
+<h2>Security Overview</h2>
+<div class="grid4"><div class="card metric"><b id="hTotal">0</b><span class="muted">TOTAL</span></div><div class="card metric allowed"><b id="hAllowed">0</b><span class="muted">ALLOWED</span></div><div class="card metric blocked"><b id="hBlocked">0</b><span class="muted">BLOCKED</span></div><div class="card metric clarify"><b id="hClarify">0</b><span class="muted">CLARIFY</span></div></div>
+<div class="card" style="margin-top:10px"><b>Multi-Layer Security Architecture</b><div class="pipe">User → Preprocessing → Signature Matching → Heuristics</div><div class="pipe">BERT → DistilBERT → Ensemble → Context → Fusion</div><div class="pipe">Threat Memory → Decision → Protected Response</div></div>
+</section>
+
+<section id="analyse" class="page">
+<h2>Prompt Security Analysis</h2>
+<div class="card"><textarea id="prompt" placeholder="Type a prompt..."></textarea><div style="margin-top:8px"><button id="analyseBtn" class="btn primary">🛡 Analyse Prompt</button> <button id="clearBtn" class="btn">✕ Clear</button></div></div>
+<div id="decision" class="card decision" style="display:none"></div>
+<div class="grid2" style="margin-top:10px"><div class="card"><div class="muted">FINAL MALICIOUS RISK</div><h1 id="risk">0%</h1><div class="track"><div id="riskFill" class="fill" style="width:0"></div></div><b>Blocking Threshold: &gt;40%</b></div><div class="card"><div class="muted">PROTECTED RESPONSE</div><pre id="response">Analyse a prompt.</pre></div></div>
+<div class="grid2" style="margin-top:10px"><div class="card"><b>Detector Contributions</b><pre id="details">Waiting for analysis...</pre></div><div class="card"><b>Complete Security Pipeline</b><div class="pipe">✓ Preprocessing</div><div class="pipe">✓ Signature — 30%</div><div class="pipe">✓ Heuristic — 25%</div><div class="pipe">○ BERT — Demo Mode</div><div class="pipe">○ DistilBERT — Demo Mode</div><div class="pipe">○ ML Ensemble — Demo Mode</div><div class="pipe">✓ Context → Fusion → Memory → Decision</div></div></div>
+</section>
+
+<section id="dashboard" class="page"><h2>Live Security Dashboard</h2><div class="grid4"><div class="card metric"><b id="dTotal">0</b><span class="muted">TOTAL</span></div><div class="card metric allowed"><b id="dAllowed">0</b><span class="muted">ALLOWED</span></div><div class="card metric blocked"><b id="dBlocked">0</b><span class="muted">BLOCKED</span></div><div class="card metric clarify"><b id="dClarify">0</b><span class="muted">CLARIFY</span></div></div></section>
+
+<section id="memory" class="page"><h2>Adaptive Threat Memory</h2><div id="memoryList" class="card"><span class="muted">No learned threats yet.</span></div></section>
+
+<section id="system" class="page"><h2>Security Engine</h2><div class="card"><div class="system-row"><span>Signature Matching</span><span class="online">ONLINE</span></div><div class="system-row"><span>Heuristic Analysis</span><span class="online">ONLINE</span></div><div class="system-row"><span>Context Analysis</span><span class="online">ONLINE</span></div><div class="system-row"><span>Weighted Fusion</span><span class="online">ONLINE</span></div><div class="system-row"><span>Adaptive Threat Memory</span><span class="online">ONLINE</span></div><div class="system-row"><span>BERT Classifier</span><span class="demo">DEMO MODE</span></div><div class="system-row"><span>DistilBERT Classifier</span><span class="demo">DEMO MODE</span></div></div><div class="card" style="margin-top:10px"><b>Fusion:</b> Signature 30% · Heuristic 25% · ML 45%<br><br><b>Rule:</b> Risk &gt;40% → BLOCKED</div></section>
+</div>
+
+<script>
+const $=id=>document.getElementById(id); let deferredPrompt=null;
+document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));document.querySelectorAll(".page").forEach(x=>x.classList.remove("active"));b.classList.add("active");$(b.dataset.page).classList.add("active");});
+$("theme").onclick=()=>document.body.classList.toggle("light"); $("clearBtn").onclick=()=>{$("prompt").value="";$("decision").style.display="none"};
+function stats(s){["h","d"].forEach(p=>{$(p+"Total").textContent=s.total||0;$(p+"Allowed").textContent=s.allowed||0;$(p+"Blocked").textContent=s.blocked||0;$(p+"Clarify").textContent=s.clarify||0;});}
+function memory(items){$("memoryList").innerHTML=!items?.length?'<span class="muted">No learned threats yet.</span>':items.map(x=>`<div class="threat"><b>${x.attack}</b><div class="muted">Hits: ${x.hits}</div><div>${x.prompt}</div></div>`).join("");}
+$("analyseBtn").onclick=async()=>{const r=await fetch("/api/analyse",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prompt:$("prompt").value})});const d=await r.json();$("decision").style.display="block";$("decision").className="card decision "+(d.status==="ALLOWED"?"allowed":d.attack==="AMBIGUOUS_TWISTED"?"clarify":"blocked");$("decision").innerHTML=`<div class="muted">SECURITY DECISION</div><h2>${d.status==="ALLOWED"?"✓":"⛔"} ${d.status}</h2><b>${d.attack}</b><div class="muted">LLM Forwarding: ${d.forwarding} · Action: ${d.action}</div>`;$("risk").textContent=(d.risk*100).toFixed(1)+"%";$("riskFill").style.width=Math.min(100,d.risk*100)+"%";$("response").textContent=d.response;$("details").textContent=`Signature: ${(d.signature*100).toFixed(1)}% [30%]\nHeuristic: ${(d.heuristic*100).toFixed(1)}% [25%]\nML Demo: ${(d.ml*100).toFixed(1)}% [45%]\nMemory Similarity: ${(d.memory*100).toFixed(1)}%\n\nReason:\n${d.reason}`;stats(d.stats);memory(d.memory_items);};
+window.addEventListener("beforeinstallprompt",e=>{e.preventDefault();deferredPrompt=e;$("install").classList.add("show")});$("installBtn").onclick=async()=>{if(deferredPrompt){deferredPrompt.prompt();await deferredPrompt.userChoice;deferredPrompt=null;$("install").classList.remove("show")}else alert("Chrome menu → Install app / Add to Home screen");};
+if("serviceWorker" in navigator)window.addEventListener("load",()=>navigator.serviceWorker.register("/service-worker.js"));
+fetch("/api/status").then(r=>r.json()).then(d=>{stats(d.stats);memory(d.memory_items)});
+</script>
+</body></html>
